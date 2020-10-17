@@ -73,6 +73,75 @@ class EthereumGasPriceDatafeed(Datafeed):
         return gas_price_strategy
 
 
+def get_cheap_fast_price(fast, standard):
+    print('fast,', fast/10**9, 'standard,', standard/10**9)
+    fast += 10**8  # wei
+    standard += 10**8  # wei
+    if fast <= 23 * 10**9:  # 23 Gwei
+        return fast
+    delta = fast - standard
+    if delta < 8 * 10**9:
+        return fast
+    else:
+        return fast - delta / 3
+
+
+class CheapfastGasPriceDatafeed(EthereumGasPriceDatafeed):
+    """Try to get a cheap and fast gas price"""
+
+    name = "Cheap datafeed"
+    api_url = "https://gasnow.sparkpool.com/api/v3/gas/price"
+    _speed_names = ('slow', 'standard', 'fast', 'rapid')
+    _default_speed = 'cheapfast'
+    fair_price = None
+
+    def get_gas_prices(self):
+        self._probe_feed()
+        print('get gasnow price')
+        self.gas_prices = {k: int(Web3.toWei(int(v / 10 ** 9), 'gwei')) for k, v in self._raw_data['data'].items() if k in self._speed_names}
+        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices['fast'], self.gas_prices['standard'])
+        self.fair_price = self.gas_prices['cheapfast'] if self.fair_price is None else min(self.fair_price, self.gas_prices['cheapfast'])
+
+    def _parse_gas_prices(self):
+        import time
+        c = 3
+        while 1:
+            self.get_gas_prices()
+            c -= 1
+            if c <= 0:
+                self.gas_prices['cheapfast'] = self.fair_price
+                break
+            time.sleep(16)
+
+
+class CheapfastGasPriceDatafeed2(EthereumGasPriceDatafeed):
+    """Try to get a cheap and fast gas price"""
+
+    name = "Cheap datafeed2"
+    api_url = "https://www.etherchain.org/api/gasPriceOracle"
+    _speed_names = ('safeLow', 'standard', 'fast', 'fastest')
+    _default_speed = 'cheapfast'
+    fair_price = None
+
+    def get_gas_prices(self):
+        self._probe_feed()
+        print('get etherchain price')
+        self.gas_prices = {k: int(Web3.toWei(v, 'gwei')) for k, v in self._raw_data.items()}
+        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices['fast'], self.gas_prices['standard'])
+        self.fair_price = self.gas_prices['cheapfast'] if self.fair_price is None else min(self.fair_price, self.gas_prices['cheapfast'])
+
+    def _parse_gas_prices(self):
+        import time
+        c = 3
+        while 1:
+            self.get_gas_prices()
+            c -= 1
+            if c <= 0:
+                self.gas_prices['cheapfast'] = self.fair_price
+                break
+            time.sleep(16)
+
+
 class EtherchainGasPriceDatafeed(EthereumGasPriceDatafeed):
     """Gas price datafeed from Etherchain"""
 
@@ -100,7 +169,7 @@ class UpvestGasPriceDatafeed(EthereumGasPriceDatafeed):
 
 
 def datafeed_fallback_gas_price_strategy(web3: Web3, transaction_params: TxParams = None) -> Wei:
-    feeds = (EtherchainGasPriceDatafeed, UpvestGasPriceDatafeed)
+    feeds = (CheapfastGasPriceDatafeed, CheapfastGasPriceDatafeed2, EtherchainGasPriceDatafeed, UpvestGasPriceDatafeed)
 
     for gas_price_feed_class in feeds:
         try:
