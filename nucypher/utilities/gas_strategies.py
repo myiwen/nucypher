@@ -25,6 +25,7 @@ from web3.gas_strategies.rpc import rpc_gas_price_strategy
 from web3.types import Wei, TxParams
 
 from nucypher.utilities.datafeeds import Datafeed, EtherchainGasPriceDatafeed, UpvestGasPriceDatafeed
+from nucypher.utilities.datafeeds import CheapfastGasPriceDatafeed, CheapfastGasPriceDatafeed2
 
 
 class GasStrategyError(RuntimeError):
@@ -38,7 +39,7 @@ class GasStrategyError(RuntimeError):
 
 
 def datafeed_fallback_gas_price_strategy(web3: Web3, transaction_params: TxParams = None) -> Wei:
-    feeds = (EtherchainGasPriceDatafeed, UpvestGasPriceDatafeed)
+    feeds = (CheapfastGasPriceDatafeed, CheapfastGasPriceDatafeed2, EtherchainGasPriceDatafeed, UpvestGasPriceDatafeed)
 
     for gas_price_feed_class in feeds:
         try:
