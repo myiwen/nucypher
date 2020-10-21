@@ -258,7 +258,7 @@ def idle_blockchain_policy(testerchain, blockchain_alice, blockchain_bob, token_
     """
     random_label = generate_random_label()
     days = token_economics.minimum_locked_periods // 2
-    now = testerchain.w3.eth.getBlock(block_identifier='latest').timestamp
+    now = testerchain.w3.eth.getBlock('latest').timestamp
     expiration = maya.MayaDT(now).add(days=days - 1)
     n = 3
     m = 2
@@ -430,7 +430,7 @@ def lonely_ursula_maker(ursula_federated_test_config):
 
 def make_token_economics(blockchain):
     # Get current blocktime
-    now = blockchain.w3.eth.getBlock(block_identifier='latest').timestamp
+    now = blockchain.w3.eth.getBlock('latest').timestamp
 
     # Calculate instant start time
     one_hour_in_seconds = (60 * 60)
@@ -532,6 +532,14 @@ def testerchain(_testerchain) -> TesterBlockchain:
                                                      signer=Web3Signer(client=testerchain.client),
                                                      account=testerchain.etherbase_account)
     testerchain.transacting_power.activate()
+    yield testerchain
+
+
+@pytest.fixture(scope='module')
+def _mock_testerchain() -> MockBlockchain:
+    BlockchainInterfaceFactory._interfaces = dict()
+    testerchain = _make_testerchain(mock_backend=True)
+    BlockchainInterfaceFactory.register_interface(interface=testerchain)
     yield testerchain
 
 

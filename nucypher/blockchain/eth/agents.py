@@ -575,7 +575,10 @@ class StakingEscrowAgent(EthereumContractAgent):
         return self.bond_worker(staker_address=staker_address, worker_address=NULL_ADDRESS)
 
     @contract_api(TRANSACTION)
-    def commit_to_next_period(self, worker_address: ChecksumAddress, fire_and_forget: bool = True) -> TxReceipt:  # TODO: make fire_and_forget required
+    def commit_to_next_period(self,
+                              worker_address: ChecksumAddress,
+                              fire_and_forget: bool = True,  # TODO: make fire_and_forget required? See #2385 too.
+                              ) -> Union[TxReceipt, HexBytes]:
         """
         For each period that the worker makes a commitment, the staker is rewarded.
         """
@@ -706,6 +709,13 @@ class StakingEscrowAgent(EthereumContractAgent):
         contract_function: ContractFunction = self.contract.functions.setSnapshots(activate)
         receipt = self.blockchain.send_transaction(contract_function=contract_function, sender_address=staker_address)
         # TODO: Handle SnapshotSet event (see #1193)
+        return receipt
+
+    @contract_api(TRANSACTION)
+    def remove_unused_stake(self, staker_address: ChecksumAddress, stake_index: int) -> TxReceipt:
+        contract_function: ContractFunction = self.contract.functions.removeUnusedSubStake(stake_index)
+        receipt: TxReceipt = self.blockchain.send_transaction(contract_function=contract_function,
+                                                              sender_address=staker_address)
         return receipt
 
     @contract_api(CONTRACT_CALL)

@@ -629,7 +629,7 @@ class Allocator:
 
         batch_size = 1
         if not gas_limit:
-            block_limit = self.staking_agent.blockchain.client.w3.eth.getBlock(block_identifier='latest').gasLimit
+            block_limit = self.staking_agent.blockchain.client.w3.eth.getBlock('latest').gasLimit
             gas_limit = int(self.OCCUPATION_RATIO * block_limit)
         self.log.debug(f"Gas limit for this batch is {gas_limit}")
 
@@ -1273,6 +1273,32 @@ class Staker(NucypherTokenActor):
 
     def disable_snapshots(self) -> TxReceipt:
         receipt = self._set_snapshots(value=False)
+        return receipt
+
+    @only_me
+    @save_receipt
+    def remove_unused_stake(self, stake: Stake) -> TxReceipt:
+        self._ensure_stake_exists(stake)
+
+        # Read on-chain stake and validate
+        stake.sync()
+        if not stake.status().is_child(Stake.Status.INACTIVE):
+            raise ValueError(f"Stake with index {stake.index} is still active")
+
+        receipt = self._remove_unused_stake(stake_index=stake.index)
+
+        # Update staking cache element
+        self.refresh_stakes()
+        return receipt
+
+    @only_me
+    @save_receipt
+    def _remove_unused_stake(self, stake_index: int) -> TxReceipt:
+        # TODO #1497 #1358
+        # if self.is_contract:
+        # else:
+        receipt = self.staking_agent.remove_unused_stake(staker_address=self.checksum_address,
+                                                         stake_index=stake_index)
         return receipt
 
     def non_withdrawable_stake(self) -> NU:

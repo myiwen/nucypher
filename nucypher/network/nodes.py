@@ -855,7 +855,7 @@ class Learner:
             current_teacher.update_snapshot(checksum=checksum,
                                             updated=maya.MayaDT(
                                                 int.from_bytes(fleet_state_updated_bytes, byteorder="big")),
-                                            number_of_known_nodes=len(self.known_nodes))
+                                            number_of_known_nodes=self.known_nodes.population())
             return FLEET_STATES_MATCH
 
         # Note: There was previously a version check here, but that required iterating through node bytestrings twice,
@@ -1363,7 +1363,8 @@ class Teacher:
                    "fleet_state": node.fleet_state_checksum or 'unknown',
                    "fleet_state_icon": fleet_icon,
                    "domain": node.serving_domain,
-                   'version': nucypher.__version__}
+                   'version': nucypher.__version__
+                   }
         return payload
 
     def abridged_node_details(self) -> dict:

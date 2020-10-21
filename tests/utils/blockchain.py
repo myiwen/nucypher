@@ -32,6 +32,7 @@ from nucypher.blockchain.eth.sol.compile import SolidityCompiler
 from nucypher.blockchain.eth.token import NU
 from nucypher.blockchain.eth.utils import epoch_to_period
 from nucypher.crypto.powers import TransactingPower
+from nucypher.utilities.gas_strategies import EXPECTED_CONFIRMATION_TIME_IN_SECONDS
 from nucypher.utilities.logging import Logger
 
 from tests.constants import (
@@ -109,6 +110,8 @@ class TesterBlockchain(BlockchainDeployerInterface):
         if not test_accounts:
             test_accounts = self._default_test_accounts
         self.free_transactions = free_transactions
+
+        EXPECTED_CONFIRMATION_TIME_IN_SECONDS['free'] = 5  # Just some upper-limit
 
         if compiler:
             TesterBlockchain._compiler = compiler
@@ -200,7 +203,7 @@ class TesterBlockchain(BlockchainDeployerInterface):
         else:
             raise ValueError("Specify either hours, seconds, or periods.")
 
-        now = self.w3.eth.getBlock(block_identifier='latest').timestamp
+        now = self.w3.eth.getBlock('latest').timestamp
         end_timestamp = ((now+duration)//base) * base
 
         self.w3.eth.web3.testing.timeTravel(timestamp=end_timestamp)
@@ -224,8 +227,8 @@ class TesterBlockchain(BlockchainDeployerInterface):
         testerchain.transacting_power = power
 
         origin = testerchain.client.etherbase
-        deployer = ContractAdministrator(deployer_address=origin, 
-                                         registry=registry, 
+        deployer = ContractAdministrator(deployer_address=origin,
+                                         registry=registry,
                                          economics=economics or cls._default_token_economics,
                                          staking_escrow_test_mode=True)
 
