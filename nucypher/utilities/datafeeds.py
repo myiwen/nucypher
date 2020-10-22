@@ -77,13 +77,13 @@ def get_cheap_fast_price(fast, standard):
     print('fast,', fast/10**9, 'standard,', standard/10**9)
     fast += 10**8  # wei
     standard += 10**8  # wei
-    if fast <= 23 * 10**9:  # 23 Gwei
+    if fast <= 27 * 10**9:  # Gwei
         return fast
     delta = fast - standard
     if delta < 8 * 10**9:
         return fast
     else:
-        return fast - delta / 3
+        return fast - (int(delta/3/10**8)*10**8)
 
 
 class CheapfastGasPriceDatafeed(EthereumGasPriceDatafeed):
