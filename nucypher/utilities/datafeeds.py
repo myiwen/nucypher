@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import requests
+from datetime import datetime, timezone, timedelta
 from web3 import Web3
 from web3.gas_strategies.rpc import rpc_gas_price_strategy
 from web3.types import Wei, TxParams
@@ -74,7 +75,7 @@ class EthereumGasPriceDatafeed(Datafeed):
 
 
 def get_cheap_fast_price(fast, standard):
-    print('fast,', fast/10**9, 'standard,', standard/10**9)
+    print('fast,', fast/10**9, 'standard,', standard/10**9, datetime.now(tz=timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'))
     fast += 10**8  # wei
     standard += 10**8  # wei
     if fast <= 27 * 10**9:  # Gwei
