@@ -17,10 +17,12 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 
 
 from collections import namedtuple
+from pathlib import Path
 
 import os
 from appdirs import AppDirs
-from pathlib import Path
+
+from maya import MayaDT
 
 import nucypher
 
@@ -32,12 +34,11 @@ NUCYPHER_ENVVAR_ALICE_ETH_PASSWORD = "NUCYPHER_ALICE_ETH_PASSWORD"
 NUCYPHER_ENVVAR_PROVIDER_URI = "NUCYPHER_PROVIDER_URI"
 NUCYPHER_ENVVAR_WORKER_IP_ADDRESS = 'NUCYPHER_WORKER_IP_ADDRESS'
 
-
 # Base Filepaths
 NUCYPHER_PACKAGE = Path(nucypher.__file__).parent.resolve()
 BASE_DIR = NUCYPHER_PACKAGE.parent.resolve()
 DEPLOY_DIR = BASE_DIR / 'deploy'
-
+NUCYPHER_TEST_DIR = BASE_DIR / 'tests'
 
 # User Application Filepaths
 APP_DIR = AppDirs(nucypher.__title__, nucypher.__author__)
@@ -70,3 +71,6 @@ TEMPORARY_DOMAIN = ":temporary-domain:"  # for use with `--dev` node runtimes
 
 # Event Blocks Throttling
 NUCYPHER_EVENTS_THROTTLE_MAX_BLOCKS = 'NUCYPHER_EVENTS_THROTTLE_MAX_BLOCKS'
+
+# Probationary period (see #2353)
+END_OF_POLICIES_PROBATIONARY_PERIOD = MayaDT.from_iso8601('2021-02-28T23:59:59.0Z')

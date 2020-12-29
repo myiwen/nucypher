@@ -14,13 +14,13 @@
  You should have received a copy of the GNU Affero General Public License
  along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-import base64
+
 
 import click
 
-
 from nucypher.characters.control.emitters import StdoutEmitter
 from nucypher.characters.control.interfaces import BobInterface
+from nucypher.characters.lawful import Alice
 from nucypher.cli.actions.auth import get_nucypher_password
 from nucypher.cli.actions.configure import (
     destroy_configuration,
@@ -48,14 +48,16 @@ from nucypher.cli.options import (
     option_registry_filepath,
     option_signer_uri,
     option_teacher_uri,
-    option_lonely
+    option_lonely, option_max_gas_price
 )
 from nucypher.cli.painting.help import paint_new_installation_help
+from nucypher.cli.painting.policies import paint_single_card
 from nucypher.cli.utils import make_cli_character, setup_emitter
 from nucypher.config.characters import BobConfiguration
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.crypto.powers import DecryptingPower
 from nucypher.network.middleware import RestMiddleware
+from nucypher.policy.identity import Card
 
 
 class BobConfigOptions:
@@ -72,6 +74,7 @@ class BobConfigOptions:
                  middleware: RestMiddleware,
                  federated_only: bool,
                  gas_strategy: str,
+                 max_gas_price: int,
                  signer_uri: str,
                  lonely: bool
                  ):
@@ -79,6 +82,7 @@ class BobConfigOptions:
         self.provider_uri = provider_uri
         self.signer_uri = signer_uri
         self.gas_strategy = gas_strategy
+        self.max_gas_price = max_gas_price
         self.domain = network
         self.registry_filepath = registry_filepath
         self.checksum_address = checksum_address
@@ -95,7 +99,8 @@ class BobConfigOptions:
                 dev_mode=True,
                 domain=TEMPORARY_DOMAIN,
                 provider_uri=self.provider_uri,
-                gas_strategy=self.gas_strategy,  # TODO: Fix type hint
+                gas_strategy=self.gas_strategy,
+                max_gas_price=self.max_gas_price,
                 signer_uri=self.signer_uri,
                 federated_only=True,
                 checksum_address=self.checksum_address,
@@ -113,6 +118,7 @@ class BobConfigOptions:
                     provider_uri=self.provider_uri,
                     signer_uri=self.signer_uri,
                     gas_strategy=self.gas_strategy,
+                    max_gas_price=self.max_gas_price,
                     registry_filepath=self.registry_filepath,
                     network_middleware=self.middleware,
                     lonely=self.lonely
@@ -139,6 +145,7 @@ class BobConfigOptions:
             provider_uri=self.provider_uri,
             signer_uri=self.signer_uri,
             gas_strategy=self.gas_strategy,
+            max_gas_price=self.max_gas_price,
             lonely=self.lonely
         )
 
@@ -150,6 +157,7 @@ class BobConfigOptions:
                        provider_uri=self.provider_uri,
                        signer_uri=self.signer_uri,
                        gas_strategy=self.gas_strategy,
+                       max_gas_price=self.max_gas_price,
                        lonely=self.lonely
                        )
         # Depends on defaults being set on Configuration classes, filtrates None values
@@ -161,6 +169,7 @@ group_config_options = group_options(
     BobConfigOptions,
     provider_uri=option_provider_uri(),
     gas_strategy=option_gas_strategy,
+    max_gas_price=option_max_gas_price,
     signer_uri=option_signer_uri,
     network=option_network(),
     registry_filepath=option_registry_filepath,
@@ -297,8 +306,26 @@ def public_keys(general_config, character_options, config_file):
 @bob.command()
 @group_character_options
 @option_config_file
-@BobInterface.connect_cli('retrieve')
 @group_general_config
+@click.option('--nickname', help="Human-readable nickname / alias for a card", type=click.STRING, required=False)
+def make_card(general_config, character_options, config_file, nickname):
+    emitter = setup_emitter(general_config)
+    BOB = character_options.create_character(emitter, config_file)
+    card = Card.from_character(BOB)
+    if nickname:
+        card.nickname = nickname
+    card.save(overwrite=True)
+    emitter.message(f"Saved new character card to {card.filepath}", color='green')
+    paint_single_card(card=card, emitter=emitter)
+
+
+@bob.command()
+@group_character_options
+@option_config_file
+@group_general_config
+@option_force
+@BobInterface.connect_cli('retrieve')
+@click.option('--alice', type=click.STRING, help="The card id or nickname of a stored Alice card.")
 @click.option('--ipfs', help="Download an encrypted message from IPFS at the specified gateway URI")
 def retrieve(general_config,
              character_options,
@@ -307,18 +334,14 @@ def retrieve(general_config,
              policy_encrypting_key,
              alice_verifying_key,
              message_kit,
-             ipfs):
+             ipfs,
+             alice,
+             force):
     """Obtain plaintext from encrypted data, if access was granted."""
 
     # Setup
     emitter = setup_emitter(general_config)
     BOB = character_options.create_character(emitter, config_file)
-
-    # Validate
-    if not all((label, policy_encrypting_key, alice_verifying_key, message_kit)):
-        input_specification, output_specification = BOB.control.get_specifications(interface_name='retrieve')
-        required_fields = ', '.join(input_specification)
-        raise click.BadArgumentUsage(f'{required_fields} are required flags to retrieve')
 
     if ipfs:
         import ipfshttpclient
@@ -329,6 +352,21 @@ def retrieve(general_config,
         raw_message_kit = ipfs_client.cat(cid)  # cat the contents at the hash reference
         emitter.message(f"Downloaded message kit from IPFS (CID {cid})", color='green')
         message_kit = raw_message_kit.decode()  # cast to utf-8
+
+    if not alice_verifying_key:
+        if alice:  # from storage
+            card = Card.load(identifier=alice)
+            if card.character is not Alice:
+                emitter.error('Grantee card is not an Alice.')
+                raise click.Abort
+            alice_verifying_key = card.verifying_key.hex()
+            emitter.message(f'{card.nickname or ("Alice #"+card.id.hex())}\n'
+                            f'Verifying Key  | {card.verifying_key.hex()}',
+                            color='green')
+            if not force:
+                click.confirm('Is this the correct Granter (Alice)?', abort=True)
+        else:  # interactive
+            alice_verifying_key = click.prompt("Enter Alice's verifying key")
 
     # Request
     bob_request_data = {

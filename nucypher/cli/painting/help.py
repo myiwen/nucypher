@@ -16,9 +16,11 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import click
+import maya
 
 from nucypher.blockchain.eth.sol.__conf__ import SOLIDITY_COMPILER_VERSION
 from nucypher.characters.banners import NUCYPHER_BANNER
+from nucypher.config.constants import DEFAULT_CONFIG_ROOT, USER_LOG_DIR, END_OF_POLICIES_PROBATIONARY_PERIOD
 
 
 def echo_version(ctx, param, value):
@@ -32,6 +34,20 @@ def echo_solidity_version(ctx, param, value):
     if not value or ctx.resilient_parsing:
         return
     click.secho(f"Supported solidity version: {SOLIDITY_COMPILER_VERSION}", bold=True)
+    ctx.exit()
+
+
+def echo_config_root_path(ctx, param, value):
+    if not value or ctx.resilient_parsing:
+        return
+    click.secho(DEFAULT_CONFIG_ROOT)
+    ctx.exit()
+
+
+def echo_logging_root_path(ctx, param, value):
+    if not value or ctx.resilient_parsing:
+        return
+    click.secho(USER_LOG_DIR)
     ctx.exit()
 
 
@@ -55,10 +71,37 @@ def paint_new_installation_help(emitter, new_configuration):
         emitter.echo(how_to_stake_message, color='green')
 
     # Everyone: Give the use a suggestion as to what to do next
-    vowels = ('a', 'e', 'i', 'o', 'u')
-    character_name_starts_with_vowel = character_name[0].lower() in vowels
-    adjective = 'an' if character_name_starts_with_vowel else 'a'
     suggested_command = f'nucypher {character_name} run'
-    how_to_run_message = f"\nTo run {adjective} {character_name.capitalize()} node from the default configuration filepath run: \n\n'{suggested_command}'\n"
-
+    how_to_run_message = f"\nTo start {character_name.capitalize()} run '{suggested_command}'\n"
     emitter.echo(how_to_run_message.format(suggested_command), color='green')
+
+
+def paint_probationary_period_disclaimer(emitter):
+    width = 60
+    import textwrap
+    disclaimer_title = " DISCLAIMER ".center(width, "=")
+    paragraph = f"""
+Some areas of the NuCypher network are still under active development;
+as a consequence, we have established a probationary period for policies in the network.
+Currently the creation of sharing policies with durations beyond {END_OF_POLICIES_PROBATIONARY_PERIOD} are prevented.
+After this date the probationary period will be over, and you will be able to create policies with any duration
+as supported by nodes on the network.
+"""
+
+    text = (
+        "\n",
+        disclaimer_title,
+        *[line.center(width) for line in textwrap.wrap(paragraph, width - 2)],
+        "=" * len(disclaimer_title),
+        "\n"
+    )
+    for sentence in text:
+        emitter.echo(sentence, color='yellow')
+
+
+def enforce_probationary_period(emitter, expiration):
+    """Used during CLI grant to prevent publication of a policy outside the probationary period."""
+    if maya.MayaDT.from_datetime(expiration) > END_OF_POLICIES_PROBATIONARY_PERIOD:
+        emitter.echo(f"The requested duration for this policy (until {expiration}) exceeds the probationary period"
+                     f" ({END_OF_POLICIES_PROBATIONARY_PERIOD}).", color="red")
+        raise click.Abort()

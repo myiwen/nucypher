@@ -18,19 +18,23 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
+
+
 import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
 from setuptools import find_packages, setup
 from setuptools.command.develop import develop
 from setuptools.command.install import install
 from typing import Dict
 
+
 #
 # Metadata
 #
-
 
 PACKAGE_NAME = 'nucypher'
 BASE_DIR = Path(__file__).parent
@@ -89,14 +93,29 @@ class PostDevelopCommand(develop):
         develop.run(self)
         subprocess.call(f"scripts/installation/install_solc.py")
 
+
 #
 #  Requirements
 #
 
-
 def read_requirements(path):
     with open(os.path.join(BASE_DIR, path)) as f:
-        _pipenv_flags, *requirements = f.read().split('\n')
+        _pipenv_flags, *lines = f.read().split('\n')
+
+    # TODO remove when will be no more git dependencies in requirements.txt
+    # Transforms VCS requirements to PEP 508
+    requirements = []
+    for line in lines:
+        if line.startswith('-e git:') or line.startswith('-e git+') or \
+                line.startswith('git:') or line.startswith('git+'):
+            # parse out egg=... fragment from VCS URL
+            parsed = urlparse(line)
+            egg_name = parsed.fragment.partition("egg=")[-1]
+            without_fragment = parsed._replace(fragment="").geturl()
+            requirements.append(f"{egg_name} @ {without_fragment}")
+        else:
+            requirements.append(line)
+
     return requirements
 
 
@@ -115,18 +134,21 @@ DEPLOY_REQUIRES = [
 ]
 
 URSULA_REQUIRES = ['prometheus_client', 'sentry-sdk']  # TODO: Consider renaming to 'monitor', etc.
+ALICE_REQUIRES = ['qrcode']
+BOB_REQUIRES = ['qrcode']
 
 EXTRAS = {
 
     # Admin
     'docs': DOCS_REQUIRE,
-    'dev': DEV_REQUIRES + DOCS_REQUIRE + URSULA_REQUIRES,
+    'dev': DEV_REQUIRES + DOCS_REQUIRE + URSULA_REQUIRES + ALICE_REQUIRES,
     'benchmark': DEV_REQUIRES + BENCHMARK_REQUIRES,
     'deploy': DOCS_REQUIRE + DEPLOY_REQUIRES,
 
     # User
-    'ursula': URSULA_REQUIRES
-
+    'ursula': URSULA_REQUIRES,
+    'alice': ALICE_REQUIRES,
+    'bob': BOB_REQUIRES
 }
 
 

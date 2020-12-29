@@ -14,30 +14,30 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-import datetime
-import math
-import time
-import random
-from abc import ABC, abstractmethod
-from collections import OrderedDict, deque
-from queue import Queue, Empty
-from typing import Callable
-from typing import Generator, List, Set
 
+
+import datetime
+from collections import OrderedDict
+from queue import Queue, Empty
+from typing import Callable, Tuple
+from typing import Generator, Set, Optional
+
+import math
 import maya
+import random
+import time
+from abc import ABC, abstractmethod
+from bytestring_splitter import BytestringSplitter, VariableLengthBytestring
+from constant_sorrow.constants import NOT_SIGNED, UNKNOWN_KFRAG
 from twisted._threads import AlreadyQuit
 from twisted.internet import reactor
 from twisted.internet.defer import ensureDeferred, Deferred
 from twisted.python.threadpool import ThreadPool
-
-from bytestring_splitter import BytestringSplitter, VariableLengthBytestring
-from constant_sorrow.constants import NOT_SIGNED, UNKNOWN_KFRAG
-from typing import Generator, List, Set, Optional
 from umbral.keys import UmbralPublicKey
 from umbral.kfrags import KFrag
 
 from nucypher.blockchain.eth.actors import BlockchainPolicyAuthor
-from nucypher.blockchain.eth.agents import PolicyManagerAgent, StakingEscrowAgent
+from nucypher.blockchain.eth.agents import PolicyManagerAgent
 from nucypher.characters.lawful import Alice, Ursula
 from nucypher.crypto.api import keccak_digest, secure_random
 from nucypher.crypto.constants import HRAC_LENGTH, PUBLIC_KEY_LENGTH
@@ -46,9 +46,8 @@ from nucypher.crypto.powers import DecryptingPower, SigningPower, TransactingPow
 from nucypher.crypto.utils import construct_policy_id
 from nucypher.network.exceptions import NodeSeemsToBeDown
 from nucypher.network.middleware import RestMiddleware
+from nucypher.policy.identity import PolicyCredential
 from nucypher.utilities.logging import Logger
-from umbral.keys import UmbralPublicKey
-from umbral.kfrags import KFrag
 
 
 class Arrangement:
@@ -340,11 +339,11 @@ class Policy(ABC):
         """Too many Ursulas rejected"""
 
     def __init__(self,
-                 alice,
-                 label,
+                 alice: Alice,
+                 label: bytes,
                  expiration: maya.MayaDT,
-                 bob=None,
-                 kfrags=(UNKNOWN_KFRAG,),
+                 bob: 'Bob' = None,
+                 kfrags: Tuple[KFrag, ...] = (UNKNOWN_KFRAG,),
                  public_key=None,
                  m: int = None,
                  alice_signature=NOT_SIGNED) -> None:
@@ -353,10 +352,10 @@ class Policy(ABC):
         :param kfrags:  A list of KFrags to distribute per this Policy.
         :param label: The identity of the resource to which Bob is granted access.
         """
-        self.alice = alice  # type: Alice
-        self.label = label  # type: bytes
-        self.bob = bob  # type: Bob
-        self.kfrags = kfrags  # type: List[KFrag]
+        self.alice = alice
+        self.label = label
+        self.bob = bob
+        self.kfrags = kfrags
         self.public_key = public_key
         self._id = construct_policy_id(self.label, bytes(self.bob.stamp))
         self.treasure_map = self._treasure_map_class(m=m)
@@ -440,14 +439,16 @@ class Policy(ABC):
         Alice or Bob. By default, it will include the treasure_map for the
         policy unless `with_treasure_map` is False.
         """
-        from nucypher.policy.collections import PolicyCredential
 
         treasure_map = self.treasure_map
         if not with_treasure_map:
             treasure_map = None
-
-        return PolicyCredential(self.alice.stamp, self.label, self.expiration,
-                                self.public_key, treasure_map)
+        credential = PolicyCredential(alice_verifying_key=self.alice.stamp,
+                                      label=self.label,
+                                      expiration=self.expiration,
+                                      policy_pubkey=self.public_key,
+                                      treasure_map=treasure_map)
+        return credential
 
     def __assign_kfrags(self) -> Generator[Arrangement, None, None]:
 
@@ -546,8 +547,10 @@ class Policy(ABC):
                                    *args, **kwargs)
 
         if len(self._accepted_arrangements) < self.n:
-            raise self.Rejected(f'Selected Ursulas rejected too many arrangements '
-                                f'- only {len(self._accepted_arrangements)} of {self.n} accepted.')
+            formatted_offenders = '\n'.join(f'{u.checksum_address}@{u.rest_url()}' for u in sampled_ursulas)
+            raise self.Rejected(f'Selected Ursulas rejected too many arrangements'
+                                f'- only {len(self._accepted_arrangements)} of {self.n} accepted.\n'
+                                f'Offending nodes: \n{formatted_offenders}\n')
 
     @abstractmethod
     def make_arrangement(self, ursula: Ursula, *args, **kwargs):
@@ -564,10 +567,8 @@ class Policy(ABC):
         selected_ursulas = set(handpicked_ursulas) if handpicked_ursulas else set()
 
         # Calculate the target sample quantity
-        target_sample_quantity = self.n - len(selected_ursulas)
-        if target_sample_quantity > 0:
-            sampled_ursulas = self.sample_essential(quantity=target_sample_quantity,
-                                                    handpicked_ursulas=selected_ursulas,
+        if self.n - len(selected_ursulas) > 0:
+            sampled_ursulas = self.sample_essential(handpicked_ursulas=selected_ursulas,
                                                     discover_on_this_thread=discover_on_this_thread)
             selected_ursulas.update(sampled_ursulas)
 
@@ -625,15 +626,17 @@ class FederatedPolicy(Policy):
             raise self.MoreKFragsThanArrangements(error)  # TODO: NotEnoughUrsulas where in the exception tree is this?
 
     def sample_essential(self,
-                         quantity: int,
                          handpicked_ursulas: Set[Ursula],
                          discover_on_this_thread: bool = True) -> Set[Ursula]:
-        self.alice.block_until_number_of_known_nodes_is(quantity, learn_on_this_thread=discover_on_this_thread)
+
+        self.alice.block_until_specific_nodes_are_known(set(ursula.checksum_address for ursula in handpicked_ursulas))
+        self.alice.block_until_number_of_known_nodes_is(self.n, learn_on_this_thread=discover_on_this_thread)
         known_nodes = self.alice.known_nodes
         if handpicked_ursulas:
             # Prevent re-sampling of handpicked ursulas.
             known_nodes = set(known_nodes) - handpicked_ursulas
-        sampled_ursulas = set(random.sample(k=quantity, population=list(known_nodes)))
+        sampled_ursulas = set(random.sample(k=self.n - len(handpicked_ursulas),
+                                            population=list(known_nodes)))
         return sampled_ursulas
 
     def make_arrangement(self, ursula: Ursula, *args, **kwargs):
@@ -727,58 +730,63 @@ class BlockchainPolicy(Policy):
         return params
 
     def sample_essential(self,
-                         quantity: int,
                          handpicked_ursulas: Set[Ursula],
                          learner_timeout: int = 1,
                          timeout: int = 10,
                          discover_on_this_thread: bool = False) -> Set[Ursula]: # TODO #843: Make timeout configurable
 
-        selected_ursulas = set(handpicked_ursulas)
-        quantity_remaining = quantity
-
-        # Need to sample some stakers
-
         handpicked_addresses = [ursula.checksum_address for ursula in handpicked_ursulas]
         reservoir = self.alice.get_stakers_reservoir(duration=self.duration_periods,
                                                      without=handpicked_addresses)
+
+        quantity_remaining = self.n - len(handpicked_ursulas)
         if len(reservoir) < quantity_remaining:
-            error = f"Cannot create policy with {quantity} arrangements"
+            error = f"Cannot create policy with {self.n} arrangements"
             raise self.NotEnoughBlockchainUrsulas(error)
 
-        to_check = set(reservoir.draw(quantity_remaining))
+        # Handpicked Ursulas are not necessarily known
+        to_check = list(handpicked_ursulas) + reservoir.draw(quantity_remaining)
+        checked = []
 
         # Sample stakers in a loop and feed them to the learner to check
         # until we have enough in `selected_ursulas`.
 
         start_time = maya.now()
-        new_to_check = to_check
 
         while True:
 
             # Check if the sampled addresses are already known.
             # If we're lucky, we won't have to wait for the learner iteration to finish.
-            known = {x for x in to_check if x in self.alice.known_nodes}
-            to_check = to_check - known
+            checked += [x for x in to_check if x in self.alice.known_nodes]
+            to_check = [x for x in to_check if x not in self.alice.known_nodes]
 
-            known = random.sample(known, min(len(known), quantity_remaining)) # we only need so many
-            selected_ursulas.update([self.alice.known_nodes[address] for address in known])
-            quantity_remaining -= len(known)
-
-            if quantity_remaining == 0:
+            if len(checked) >= self.n:
                 break
-            else:
-                new_to_check = reservoir.draw_at_most(quantity_remaining)
-                to_check.update(new_to_check)
+
+            # The number of new nodes to draw on each iteration.
+            # The choice of this depends on how expensive it is to check a node for validity,
+            # and how likely is it for a picked node to be offline.
+            # We assume here that it is unlikely, and be conservative.
+            drawing_step = self.n - len(checked)
+
+            # Draw a little bit more nodes, if there are any
+            to_check += reservoir.draw_at_most(drawing_step)
 
             delta = maya.now() - start_time
             if delta.total_seconds() >= timeout:
                 still_checking = ', '.join(to_check)
+                quantity_remaining = self.n - len(checked)
                 raise RuntimeError(f"Timed out after {timeout} seconds; "
                                    f"need {quantity_remaining} more, still checking {still_checking}.")
 
-            self.alice.block_until_specific_nodes_are_known(to_check, learn_on_this_thread=discover_on_this_thread)
+            self.alice.block_until_specific_nodes_are_known(to_check,
+                                                            learn_on_this_thread=discover_on_this_thread,
+                                                            allow_missing=len(to_check),
+                                                            timeout=learner_timeout)
 
-        found_ursulas = list(selected_ursulas)
+        # We only need `n` nodes. Pick the first `n` ones,
+        # since they were the first drawn, and hence have the priority.
+        found_ursulas = [self.alice.known_nodes[address] for address in checked[:self.n]]
 
         # Randomize the output to avoid the largest stakers always being the first in the list
         system_random = random.SystemRandom()

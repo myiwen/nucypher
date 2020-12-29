@@ -25,13 +25,14 @@ import pytest
 from nucypher.characters.control.emitters import JSONRPCStdoutEmitter
 from nucypher.characters.lawful import Ursula
 from nucypher.cli import utils
-from nucypher.cli.literature import SUCCESSFUL_DESTRUCTION
+from nucypher.cli.literature import SUCCESSFUL_DESTRUCTION, COLLECT_NUCYPHER_PASSWORD
 from nucypher.cli.main import nucypher_cli
 from nucypher.config.characters import BobConfiguration
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import SigningPower
 from nucypher.utilities.logging import GlobalLoggerSettings, Logger
+from nucypher.policy.identity import Card
 from tests.constants import (
     FAKE_PASSWORD_CONFIRMED,
     INSECURE_DEVELOPMENT_PASSWORD,
@@ -48,14 +49,6 @@ def test_missing_configuration_file(default_filepath_mock, click_runner):
     assert result.exit_code != 0
     assert default_filepath_mock.called
     assert "nucypher bob init" in result.output
-
-
-def test_bob_public_keys(click_runner):
-    derive_key_args = ('bob', 'public-keys', '--dev')
-    result = click_runner.invoke(nucypher_cli, derive_key_args, catch_exceptions=False)
-    assert result.exit_code == 0
-    assert "bob_encrypting_key" in result.output
-    assert "bob_verifying_key" in result.output
 
 
 def test_initialize_bob_with_custom_configuration_root(custom_filepath, click_runner):
@@ -81,7 +74,7 @@ def test_initialize_bob_with_custom_configuration_root(custom_filepath, click_ru
     assert os.path.isfile(custom_config_filepath), 'Configuration file does not exist'
 
     # Auth
-    assert 'Enter NuCypher keyring password' in result.output, 'WARNING: User was not prompted for password'
+    assert COLLECT_NUCYPHER_PASSWORD in result.output, 'WARNING: User was not prompted for password'
     assert 'Repeat for confirmation:' in result.output, 'User was not prompted to confirm password'
 
 
@@ -92,6 +85,16 @@ def test_bob_control_starts_with_preexisting_configuration(click_runner, custom_
     assert result.exit_code == 0, result.exception
     assert "Bob Verifying Key" in result.output
     assert "Bob Encrypting Key" in result.output
+
+
+def test_bob_make_card(click_runner, custom_filepath, mocker):
+    mock_save_card = mocker.patch.object(Card, 'save')
+    custom_config_filepath = os.path.join(custom_filepath, BobConfiguration.generate_filename())
+    command = ('bob', 'make-card', '--nickname', 'anders', '--config-file', custom_config_filepath)
+    result = click_runner.invoke(nucypher_cli, command, input=FAKE_PASSWORD_CONFIRMED, catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "Saved new character card " in result.output
+    mock_save_card.assert_called_once()
 
 
 def test_bob_view_with_preexisting_configuration(click_runner, custom_filepath):

@@ -15,27 +15,15 @@ You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import json
-
 import maya
 import os
-import shutil
 import time
-from constant_sorrow.constants import NOT_RUNNING, UNKNOWN_DEVELOPMENT_CHAIN_ID
+from constant_sorrow.constants import UNKNOWN_DEVELOPMENT_CHAIN_ID
 from cytoolz.dicttoolz import dissoc
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_typing.evm import BlockNumber, ChecksumAddress
 from eth_utils import to_canonical_address, to_checksum_address
-from geth import LoggingMixin
-from geth.accounts import create_new_account, get_accounts
-from geth.chain import (
-    get_chain_data_dir,
-    initialize_chain,
-    is_live_chain,
-    is_ropsten_chain
-)
-from geth.process import BaseGethProcess
 from typing import Union
 from web3 import Web3
 from web3.contract import Contract
@@ -46,7 +34,6 @@ from web3.exceptions import TimeExhausted, TransactionNotFound
 from nucypher.blockchain.eth.constants import AVERAGE_BLOCK_TIME_IN_SECONDS
 from nucypher.blockchain.middleware.retry import RetryRequestMiddleware, AlchemyRetryRequestMiddleware, \
     InfuraRetryRequestMiddleware
-from nucypher.config.constants import DEFAULT_CONFIG_ROOT, DEPLOY_DIR, USER_LOG_DIR
 from nucypher.utilities.logging import Logger
 
 UNKNOWN_DEVELOPMENT_CHAIN_ID.bool_value(True)
@@ -66,34 +53,30 @@ class Web3ClientUnexpectedVersionString(Web3ClientError):
 
 # TODO: Consider creating a ChainInventory class and/or moving this to a separate module
 
+PUBLIC_CHAINS = {
+    0: "Olympic",
+    1: "Mainnet",
+    2: "Morden",
+    3: "Ropsten",
+    4: "Rinkeby",
+    5: "Goerli",
+    6: "Kotti",
+    42: "Kovan",
+    77: "Sokol",
+    100: "xDai",
+}
 
-PUBLIC_CHAINS = {0: "Olympic",
-                 1: "Mainnet",
-                 2: "Morden",
-                 3: "Ropsten",
-                 4: "Rinkeby",
-                 5: "Goerli",
-                 6: "Kotti",
-                 8: "Ubiq",
-                 42: "Kovan",
-                 60: "GoChain",
-                 77: "Sokol",
-                 99: "Core",
-                 100: "xDai",
-                 31337: "GoChain",
-                 401697: "Tobalaba",
-                 7762959: "Musicoin",
-                 61717561: "Aquachain"}
+LOCAL_CHAINS = {
+    1337: "GethDev",
+    5777: "Ganache/TestRPC"
+}
 
-LOCAL_CHAINS = {1337: "GethDev",
-                5777: "Ganache/TestRPC"}
-
-POA_CHAINS = {  # TODO: This list is incomplete, but it suffices for the moment - See #1857
-    4,  # Rinkeby
-    5,  # Goerli
-    42,  # Kovan
-    77,  # Sokol
-    99,  # Core
+# TODO: This list is incomplete, but it suffices for the moment - See #1857
+POA_CHAINS = {
+    4,    # Rinkeby
+    5,    # Goerli
+    42,   # Kovan
+    77,   # Sokol
     100,  # xDAI
 }
 
@@ -109,9 +92,6 @@ class EthereumClient:
     ETHEREUM_TESTER = 'EthereumTester'  # (PyEVM)
     CLEF = 'Clef'  # Signer-only
 
-    PEERING_TIMEOUT = 30  # seconds
-    SYNC_TIMEOUT_DURATION = 60  # seconds to wait for various blockchain syncing endeavors
-    SYNC_SLEEP_DURATION = 5  # seconds
     BLOCK_CONFIRMATIONS_POLLING_TIME = 3  # seconds
     TRANSACTION_POLLING_TIME = 0.5  # seconds
     COOLING_TIME = 5  # seconds
@@ -227,10 +207,6 @@ class EthereumClient:
         chain_inventory = LOCAL_CHAINS if self.is_local else PUBLIC_CHAINS
         name = chain_inventory.get(self.chain_id, UNKNOWN_DEVELOPMENT_CHAIN_ID)
         return name
-
-    @property
-    def syncing(self) -> Union[bool, dict]:
-        return self.w3.eth.syncing
 
     def lock_account(self, account) -> bool:
         if self.is_local:
@@ -415,46 +391,6 @@ class EthereumClient:
         # check that our local chain data is up to date
         return (time.time() - self.get_blocktime()) < self.STALECHECK_ALLOWABLE_DELAY
 
-    def sync(self, timeout: int = 120, quiet: bool = False):
-
-        # Provide compatibility with local chains
-        if self.is_local:
-            return
-
-        # Record start time for timeout calculation
-        now = maya.now()
-        start_time = now
-
-        def check_for_timeout(t):
-            last_update = maya.now()
-            duration = (last_update - start_time).total_seconds()
-            if duration > t:
-                raise self.SyncTimeout
-
-        while not self._has_latest_block():
-            # Check for ethereum peers
-            self.log.info(f"Waiting for Ethereum peers ({len(self.peers)} known)")
-            while not self.peers:
-                time.sleep(0)
-                check_for_timeout(t=self.PEERING_TIMEOUT)
-
-            # Wait for sync start
-            self.log.info(f"Waiting for {self.chain_name.capitalize()} chain synchronization to begin")
-            while not self.syncing:
-                time.sleep(0)
-                check_for_timeout(t=self.SYNC_TIMEOUT_DURATION * 2)
-
-            while True:
-                syncdata = self.syncing
-                if not syncdata:
-                    return False
-
-                self.log.info(f"Syncing {syncdata['currentBlock']}/{syncdata['highestBlock']}")
-                time.sleep(self.SYNC_SLEEP_DURATION)
-                yield syncdata
-
-        return True
-
     def parse_transaction_data(self, transaction):
         return transaction.input
 
@@ -549,9 +485,6 @@ class GanacheClient(EthereumClient):
     def unlock_account(self, *args, **kwargs) -> bool:
         return True
 
-    def sync(self, *args, **kwargs) -> bool:
-        return True
-
 
 class InfuraClient(EthereumClient):
     is_local = False
@@ -563,9 +496,6 @@ class InfuraClient(EthereumClient):
         self.add_middleware(InfuraRetryRequestMiddleware)
 
     def unlock_account(self, *args, **kwargs) -> bool:
-        return True
-
-    def sync(self, *args, **kwargs) -> bool:
         return True
 
 
@@ -600,9 +530,6 @@ class EthereumTesterClient(EthereumClient):
         else:
             return self.w3.provider.ethereum_tester.lock_account(account=account)
 
-    def sync(self, *args, **kwargs):
-        return True
-
     def new_account(self, password: str) -> str:
         insecure_account = self.w3.provider.ethereum_tester.add_account(private_key=os.urandom(32).hex(),
                                                                         password=password)
@@ -634,214 +561,3 @@ class EthereumTesterClient(EthereumClient):
 
     def parse_transaction_data(self, transaction):
         return transaction.data  # TODO: See https://github.com/ethereum/eth-tester/issues/173
-
-
-class NuCypherGethProcess(LoggingMixin, BaseGethProcess):
-    IPC_PROTOCOL = 'http'
-    IPC_FILENAME = 'geth.ipc'
-    VERBOSITY = 5
-    CHAIN_ID = NotImplemented
-    _CHAIN_NAME = NotImplemented
-
-    _LOG_NAME = 'nucypher-geth'
-    LOG = Logger(_LOG_NAME)
-    LOG_PATH = os.path.join(USER_LOG_DIR, f'{LOG}.log')
-
-    def __init__(self,
-                 geth_kwargs: dict,
-                 stdout_logfile_path: str = LOG_PATH,
-                 stderr_logfile_path: str = LOG_PATH,
-                 *args, **kwargs):
-
-        super().__init__(geth_kwargs=geth_kwargs,
-                         stdout_logfile_path=stdout_logfile_path,
-                         stderr_logfile_path=stderr_logfile_path,
-                         *args, **kwargs)
-
-    def provider_uri(self, scheme: str = None) -> str:
-        if not scheme:
-            scheme = self.IPC_PROTOCOL
-        if scheme in ('file', 'ipc'):
-            location = self.ipc_path
-        elif scheme in ('http', 'ws'):
-            location = f'{self.rpc_host}:{self.rpc_port}'
-        else:
-            raise ValueError(f'{scheme} is an unknown ethereum node IPC protocol.')
-
-        uri = f"{scheme}://{location}"
-        return uri
-
-    def start(self, timeout: int = 30, extra_delay: int = 1):
-        self.LOG.info(f"STARTING GETH NOW | CHAIN ID {self.CHAIN_ID} | {self.IPC_PROTOCOL}://{self.ipc_path}")
-        super().start()
-        self.wait_for_ipc(timeout=timeout)  # on for all nodes by default
-        if self.IPC_PROTOCOL in ('rpc', 'http'):
-            self.wait_for_rpc(timeout=timeout)
-        time.sleep(extra_delay)
-
-    def ensure_account_exists(self, password: str) -> str:
-        accounts = get_accounts(**self.geth_kwargs)
-        if not accounts:
-            account = create_new_account(password=password.encode(), **self.geth_kwargs)
-        else:
-            account = accounts[0]  # etherbase by default
-        checksum_address = to_checksum_address(account.decode())
-        return checksum_address
-
-
-class NuCypherGethDevProcess(NuCypherGethProcess):
-    _CHAIN_NAME = 'poa-development'
-
-    def __init__(self, config_root: str = None, *args, **kwargs):
-
-        base_dir = config_root if config_root else DEFAULT_CONFIG_ROOT
-        base_dir = os.path.join(base_dir, '.ethereum')
-        self.data_dir = get_chain_data_dir(base_dir=base_dir, name=self._CHAIN_NAME)
-
-        ipc_path = os.path.join(self.data_dir, 'geth.ipc')
-        self.geth_kwargs = {'ipc_path': ipc_path,
-                            'data_dir': self.data_dir}
-
-        super().__init__(geth_kwargs=self.geth_kwargs, *args, **kwargs)
-        self.command = [*self.command, '--dev']
-
-    def start(self, timeout: int = 30, extra_delay: int = 1):
-        if not self.is_running:
-            self.LOG.info("STARTING GETH DEV PROCESS NOW")
-            BaseGethProcess.start(self)  # <--- START GETH
-            time.sleep(extra_delay)  # give it a second
-            self.wait_for_ipc(timeout=timeout)
-        else:
-            self.LOG.info("RECONNECTING TO GETH DEV PROCESS")
-
-
-class NuCypherGethDevnetProcess(NuCypherGethProcess):
-    IPC_PROTOCOL = 'file'
-    GENESIS_FILENAME = 'testnet_genesis.json'
-    GENESIS_SOURCE_FILEPATH = os.path.join(DEPLOY_DIR, GENESIS_FILENAME)
-
-    P2P_PORT = 30303
-    _CHAIN_NAME = 'devnet'
-    __CHAIN_ID = 112358
-
-    def __init__(self,
-                 config_root: str = None,
-                 overrides: dict = None,
-                 *args, **kwargs):
-
-        log = Logger('nucypher-geth-devnet')
-
-        if overrides is None:
-            overrides = dict()
-
-        # Validate
-        invalid_override = f"You cannot specify `network_id` for a {self.__class__.__name__}"
-        if 'data_dir' in overrides:
-            raise ValueError(invalid_override)
-        if 'network_id' in overrides:
-            raise ValueError(invalid_override)
-
-        # Set the data dir
-        if config_root is None:
-            base_dir = os.path.join(DEFAULT_CONFIG_ROOT, '.ethereum')
-        else:
-            base_dir = os.path.join(config_root, '.ethereum')
-        self.data_dir = get_chain_data_dir(base_dir=base_dir, name=self._CHAIN_NAME)
-
-        # Hardcoded Geth CLI args for devnet child process ("light client")
-        ipc_path = os.path.join(self.data_dir, self.IPC_FILENAME)
-        geth_kwargs = {'network_id': str(self.__CHAIN_ID),
-                       'port': str(self.P2P_PORT),
-                       'verbosity': str(self.VERBOSITY),
-                       'data_dir': self.data_dir,
-                       'ipc_path': ipc_path,
-                       'rpc_enabled': True,
-                       'no_discover': True,
-                       }
-
-        # Genesis & Blockchain Init
-        self.genesis_filepath = os.path.join(self.data_dir, self.GENESIS_FILENAME)
-        needs_init = all((
-            not os.path.exists(self.genesis_filepath),
-            not is_live_chain(self.data_dir),
-            not is_ropsten_chain(self.data_dir),
-        ))
-
-        if needs_init:
-            log.debug("Local system needs geth blockchain initialization")
-            self.initialized = False
-        else:
-            self.initialized = True
-
-        self.__process = NOT_RUNNING
-
-        super().__init__(geth_kwargs=geth_kwargs, *args, **kwargs)  # Attaches self.geth_kwargs in super call
-        self.command = [*self.command, '--syncmode', 'fast']
-
-    def initialize_blockchain(self, overwrite: bool = True) -> None:
-        log = Logger('nucypher-geth-init')
-        with open(self.GENESIS_SOURCE_FILEPATH, 'r') as file:
-            genesis_data = json.loads(file.read())
-            log.info(f"Read genesis file '{self.GENESIS_SOURCE_FILEPATH}'")
-
-        genesis_data.update(dict(overwrite=overwrite))
-        log.info(f'Initializing new blockchain database and genesis block.')
-        initialize_chain(genesis_data=genesis_data, **self.geth_kwargs)
-
-        # Write static nodes file to data dir
-        bootnodes_filepath = os.path.join(DEPLOY_DIR, 'static-nodes.json')
-        shutil.copy(bootnodes_filepath, os.path.join(self.data_dir))
-
-
-class NuCypherGethGoerliProcess(NuCypherGethProcess):
-    IPC_PROTOCOL = 'file'
-    GENESIS_FILENAME = 'testnet_genesis.json'
-    GENESIS_SOURCE_FILEPATH = os.path.join(DEPLOY_DIR, GENESIS_FILENAME)
-
-    P2P_PORT = 30303
-    _CHAIN_NAME = 'goerli'
-    CHAIN_ID = 5
-
-    def __init__(self,
-                 config_root: str = None,
-                 overrides: dict = None,
-                 *args, **kwargs):
-
-        if overrides is None:
-            overrides = dict()
-
-        # Validate
-        invalid_override = f"You cannot specify `data_dir` or `network_id` for a {self.__class__.__name__}"
-        if 'data_dir' in overrides:
-            raise ValueError(invalid_override)
-        if 'network_id' in overrides:
-            raise ValueError(invalid_override)
-
-        # Set the data dir
-        if config_root is None:
-            base_dir = os.path.join(DEFAULT_CONFIG_ROOT, '.ethereum')
-        else:
-            base_dir = os.path.join(config_root, '.ethereum')
-        self.data_dir = get_chain_data_dir(base_dir=base_dir, name=self._CHAIN_NAME)
-
-        # Hardcoded Geth CLI args for devnet child process ("light client")
-        ipc_path = os.path.join(self.data_dir, self.IPC_FILENAME)
-        geth_kwargs = {'port': str(self.P2P_PORT),
-                       'verbosity': str(self.VERBOSITY),
-                       'data_dir': self.data_dir,
-                       'ipc_path': ipc_path,
-                       'rpc_enabled': True,
-                       'no_discover': False,
-                       }
-
-        # Genesis & Blockchain Init
-        all_good = all((
-            not is_ropsten_chain(self.data_dir),
-        ))
-
-        if not all_good:
-            raise RuntimeError('Unintentional connection to Ropsten')
-
-        self.__process = NOT_RUNNING
-        super().__init__(geth_kwargs=geth_kwargs, *args, **kwargs)  # Attaches self.geth_kwargs in super call
-        self.command = [*self.command, '--syncmode', 'fast', '--goerli']

@@ -133,6 +133,7 @@ Whitepapers
    guides/development/development
    guides/ethereum_node
    guides/worklock_guide
+   guides/dao_guide
    guides/environment_variables
    guides/contribution_guide
 
@@ -152,6 +153,7 @@ Whitepapers
    architecture/worklock
    architecture/contracts
    architecture/upgradeable_proxy_contracts
+   architecture/dao
    architecture/sub_stakes
    architecture/slashing
    architecture/service_fees
@@ -168,6 +170,13 @@ Whitepapers
    api/nucypher.datastore
    api/nucypher.crypto
    api/nucypher.acumen
+
+.. toctree::
+   :maxdepth: 1
+   :glob:
+   :caption: Contracts API
+
+   contracts_api/index
 
 .. toctree::
    :maxdepth: 1

@@ -161,7 +161,6 @@ def connect_to_blockchain(emitter: StdoutEmitter,
         if not BlockchainInterfaceFactory.is_interface_initialized(provider_uri=provider_uri):
             BlockchainInterfaceFactory.initialize_interface(provider_uri=provider_uri,
                                                             light=light,
-                                                            sync=False,
                                                             emitter=emitter)
         emitter.echo(message=CONNECTING_TO_BLOCKCHAIN)
         blockchain = BlockchainInterfaceFactory.get_interface(provider_uri=provider_uri)
@@ -177,16 +176,17 @@ def initialize_deployer_interface(emitter: StdoutEmitter,
                                   poa: bool,
                                   provider_uri,
                                   ignore_solidity_check: bool,
-                                  gas_strategy: str = None
+                                  gas_strategy: str = None,
+                                  max_gas_price: int = None
                                   ) -> BlockchainDeployerInterface:
     
     if not BlockchainInterfaceFactory.is_interface_initialized(provider_uri=provider_uri):
         deployer_interface = BlockchainDeployerInterface(provider_uri=provider_uri,
                                                          poa=poa,
                                                          ignore_solidity_check=ignore_solidity_check,
-                                                         gas_strategy=gas_strategy)
-        BlockchainInterfaceFactory.register_interface(interface=deployer_interface, sync=False,
-                                                      emitter=emitter)
+                                                         gas_strategy=gas_strategy,
+                                                         max_gas_price=max_gas_price)
+        BlockchainInterfaceFactory.register_interface(interface=deployer_interface, emitter=emitter)
     else:
         deployer_interface = BlockchainInterfaceFactory.get_interface(provider_uri=provider_uri)
     deployer_interface.connect()

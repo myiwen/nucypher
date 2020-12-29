@@ -14,7 +14,7 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
-
+from decimal import Decimal
 
 import os
 import re
@@ -28,10 +28,9 @@ from constant_sorrow.constants import (
 )
 from eth_utils.address import is_checksum_address
 from tempfile import TemporaryDirectory
-from typing import Callable, List, Set, Union
-
-from nucypher.characters.lawful import Ursula
+from typing import Callable, List, Union, Optional
 from umbral.signing import Signature
+from web3 import Web3
 
 from nucypher.blockchain.eth.interfaces import BlockchainInterfaceFactory
 from nucypher.blockchain.eth.networks import NetworksInventory
@@ -41,6 +40,7 @@ from nucypher.blockchain.eth.registry import (
     LocalContractRegistry
 )
 from nucypher.blockchain.eth.signers import Signer
+from nucypher.characters.lawful import Ursula
 from nucypher.config.base import BaseConfiguration
 from nucypher.config.keyring import NucypherKeyring
 from nucypher.config.storages import ForgetfulNodeStorage, LocalFileBasedNodeStorage, NodeStorage
@@ -68,6 +68,17 @@ class CharacterConfiguration(BaseConfiguration):
 
     # Gas
     DEFAULT_GAS_STRATEGY = 'fast'
+
+    # Fields specified here are *not* passed into the Character's constructor
+    # and can be understood as configuration fields only.
+    _CONFIG_FIELDS = ('config_root',
+                      'poa',
+                      'light',
+                      'provider_uri',
+                      'registry_filepath',
+                      'gas_strategy',
+                      'max_gas_price',  # gwei
+                      'signer_uri')
 
     def __init__(self,
 
@@ -109,10 +120,9 @@ class CharacterConfiguration(BaseConfiguration):
                  # Blockchain
                  poa: bool = None,
                  light: bool = False,
-                 sync: bool = False,
                  provider_uri: str = None,
-                 provider_process=None,
                  gas_strategy: Union[Callable, str] = DEFAULT_GAS_STRATEGY,
+                 max_gas_price: Optional[int] = None,
                  signer_uri: str = None,
 
                  # Registry
@@ -120,7 +130,8 @@ class CharacterConfiguration(BaseConfiguration):
                  registry_filepath: str = None,
 
                  # Deployed Workers
-                 worker_data: dict = None):
+                 worker_data: dict = None
+                 ):
 
         self.log = Logger(self.__class__.__name__)
         UNINITIALIZED_CONFIGURATION.bool_value(False)
@@ -149,7 +160,6 @@ class CharacterConfiguration(BaseConfiguration):
         self.poa = poa
         self.is_light = light
         self.provider_uri = provider_uri or NO_BLOCKCHAIN_CONNECTION
-        self.provider_process = provider_process or NO_BLOCKCHAIN_CONNECTION
         self.signer_uri = signer_uri or None
 
         # Learner
@@ -183,9 +193,9 @@ class CharacterConfiguration(BaseConfiguration):
             # Check for incompatible values
             blockchain_args = {'filepath': registry_filepath,
                                'poa': poa,
-                               'provider_process': provider_process,
                                'provider_uri': provider_uri,
-                               'gas_strategy': gas_strategy}
+                               'gas_strategy': gas_strategy,
+                               'max_gas_price': max_gas_price}
             if any(blockchain_args.values()):
                 bad_args = ", ".join(f"{arg}={val}" for arg, val in blockchain_args.items() if val)
                 self.log.warn(f"Arguments {bad_args} are incompatible with federated_only. "
@@ -196,9 +206,9 @@ class CharacterConfiguration(BaseConfiguration):
                 self.poa = False
                 self.is_light = False
                 self.provider_uri = None
-                self.provider_process = None
                 self.registry_filepath = None
                 self.gas_strategy = None
+                self.max_gas_price = None
 
         #
         # Decentralized
@@ -206,15 +216,15 @@ class CharacterConfiguration(BaseConfiguration):
 
         else:
             self.gas_strategy = gas_strategy
+            self.max_gas_price = max_gas_price  # gwei
             is_initialized = BlockchainInterfaceFactory.is_interface_initialized(provider_uri=self.provider_uri)
             if not is_initialized and provider_uri:
                 BlockchainInterfaceFactory.initialize_interface(provider_uri=self.provider_uri,
                                                                 poa=self.poa,
                                                                 light=self.is_light,
-                                                                provider_process=self.provider_process,
-                                                                sync=sync,
                                                                 emitter=emitter,
-                                                                gas_strategy=gas_strategy)
+                                                                gas_strategy=self.gas_strategy,
+                                                                max_gas_price=self.max_gas_price)
             else:
                 self.log.warn(f"Using existing blockchain interface connection ({self.provider_uri}).")
 
@@ -334,14 +344,7 @@ class CharacterConfiguration(BaseConfiguration):
         Warning: This method allows mutation and may result in an inconsistent configuration.
         """
         merged_parameters = {**self.static_payload(), **self.dynamic_payload, **overrides}
-        non_init_params = ('config_root',
-                           'poa',
-                           'light',
-                           'provider_uri',
-                           'registry_filepath',
-                           'gas_strategy',
-                           'signer_uri')
-        character_init_params = filter(lambda t: t[0] not in non_init_params, merged_parameters.items())
+        character_init_params = filter(lambda t: t[0] not in self._CONFIG_FIELDS, merged_parameters.items())
         return dict(character_init_params)
 
     def produce(self, **overrides) -> CHARACTER_CLASS:
@@ -359,9 +362,12 @@ class CharacterConfiguration(BaseConfiguration):
         node_storage = cls.load_node_storage(storage_payload=payload['node_storage'],
                                              federated_only=payload['federated_only'])
         domain = payload['domain']
+        max_gas_price = payload.get('max_gas_price')  # gwei
+        if max_gas_price:
+            max_gas_price = Decimal(max_gas_price)
 
         # Assemble
-        payload.update(dict(node_storage=node_storage, domain=domain))
+        payload.update(dict(node_storage=node_storage, domain=domain, max_gas_price=max_gas_price))
         # Filter out None values from **overrides to detect, well, overrides...
         # Acts as a shim for optional CLI flags.
         overrides = {k: v for k, v in overrides.items() if v is not None}
@@ -371,13 +377,12 @@ class CharacterConfiguration(BaseConfiguration):
     @classmethod
     def from_configuration_file(cls,
                                 filepath: str = None,
-                                provider_process=None,
                                 **overrides  # < ---- Inlet for CLI Flags
                                 ) -> 'CharacterConfiguration':
         """Initialize a CharacterConfiguration from a JSON file."""
         filepath = filepath or cls.default_filepath()
         assembled_params = cls.assemble(filepath=filepath, **overrides)
-        node_configuration = cls(filepath=filepath, provider_process=provider_process, **assembled_params)
+        node_configuration = cls(filepath=filepath, **assembled_params)
         return node_configuration
 
     def validate(self) -> bool:
@@ -429,7 +434,8 @@ class CharacterConfiguration(BaseConfiguration):
                 payload.update(dict(registry_filepath=self.registry_filepath))
 
             # Gas Price
-            payload.update(dict(gas_strategy=self.gas_strategy))
+            __max_price = str(self.max_gas_price) if self.max_gas_price else None
+            payload.update(dict(gas_strategy=self.gas_strategy, max_gas_price=__max_price))
 
         # Merge with base payload
         base_payload = super().static_payload()
@@ -524,34 +530,21 @@ class CharacterConfiguration(BaseConfiguration):
 
     def write_keyring(self, password: str, checksum_address: str = None, **generation_kwargs) -> NucypherKeyring:
 
+        # Configure checksum address
+        checksum_address = checksum_address or self.checksum_address
         if self.federated_only:
             checksum_address = FEDERATED_ADDRESS
-
         elif not checksum_address:
+            raise self.ConfigurationError(f'No checksum address provided for decentralized configuration.')
 
-            # Note: It is assumed the blockchain interface is not yet connected.
-            if self.provider_process:
-
-                # Generate Geth's "datadir"
-                if not os.path.exists(self.provider_process.data_dir):
-                    os.mkdir(self.provider_process.data_dir)
-
-                # Get or create wallet address
-                if not self.checksum_address:
-                    self.checksum_address = self.provider_process.ensure_account_exists(password=password)
-                elif self.checksum_address not in self.provider_process.accounts():
-                    raise self.ConfigurationError(f'Unknown Account {self.checksum_address}')
-
-            elif not self.checksum_address:
-                raise self.ConfigurationError(f'No checksum address provided for decentralized configuration.')
-
-            checksum_address = self.checksum_address
-
+        # Generate new keys
         self.keyring = NucypherKeyring.generate(password=password,
                                                 keyring_root=self.keyring_root,
                                                 checksum_address=checksum_address,
                                                 **generation_kwargs)
 
+        # In the case of a federated keyring generation,
+        # the generated federated address must be set here.
         if self.federated_only:
             self.checksum_address = self.keyring.checksum_address
 

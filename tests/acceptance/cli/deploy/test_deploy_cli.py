@@ -27,7 +27,7 @@ from nucypher.blockchain.eth.interfaces import BlockchainInterface
 from nucypher.blockchain.eth.networks import NetworksInventory
 from nucypher.blockchain.eth.registry import LocalContractRegistry
 from nucypher.blockchain.eth.signers import Signer
-from nucypher.blockchain.eth.sol.compile import SOLIDITY_COMPILER_VERSION
+from nucypher.blockchain.eth.sol import SOLIDITY_COMPILER_VERSION
 from nucypher.cli.commands.deploy import deploy
 from nucypher.config.constants import TEMPORARY_DOMAIN
 from tests.constants import TEST_PROVIDER_URI, YES_ENTER
@@ -39,13 +39,6 @@ CONTRACTS_TO_UPGRADE = ('StakingEscrow', 'PolicyManager', 'Adjudicator', 'Stakin
 @pytest.fixture(scope="module")
 def registry_filepath(temp_dir_path):
     return os.path.join(temp_dir_path, 'nucypher-test-autodeploy.json')
-
-
-def test_echo_solidity_version(click_runner):
-    version_args = ('--solidity-version', )
-    result = click_runner.invoke(deploy, version_args, catch_exceptions=False)
-    assert result.exit_code == 0
-    assert str(SOLIDITY_COMPILER_VERSION) in result.output, 'Solidity version text was not produced.'
 
 
 def test_deploy_single_contract(click_runner, tempfile_path):

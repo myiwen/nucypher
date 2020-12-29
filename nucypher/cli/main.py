@@ -17,12 +17,30 @@ along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 
 import click
 
-from nucypher.cli.commands import alice, bob, dao, enrico, felix, multisig, stake, status, ursula, worklock, cloudworkers
-from nucypher.cli.painting.help import echo_version
+from nucypher.cli.commands import (
+    alice,
+    bob,
+    dao,
+    enrico,
+    felix,
+    multisig,
+    stake,
+    status,
+    ursula,
+    worklock,
+    cloudworkers,
+    contacts
+)
+from nucypher.cli.painting.help import echo_version, echo_config_root_path, echo_logging_root_path
 
 
 @click.group()
-@click.option('--version', help="Echo the CLI version", is_flag=True, callback=echo_version, expose_value=False, is_eager=True)
+@click.option('--version', help="Echo the CLI version",
+              is_flag=True, callback=echo_version, expose_value=False, is_eager=True)
+@click.option('--config-path', help="Echo the configuration root directory path",
+              is_flag=True, callback=echo_config_root_path, expose_value=False, is_eager=True)
+@click.option('--logging-path', help="Echo the logging root directory path",
+              is_flag=True, callback=echo_logging_root_path, expose_value=False, is_eager=True)
 def nucypher_cli():
     """Top level command for all things nucypher."""
 
@@ -53,20 +71,21 @@ def nucypher_cli():
 
 ENTRY_POINTS = (
 
-    # Characters
+    # Characters & Actors
     alice.alice,        # Author of Policies
     bob.bob,            # Builder of Capsules
     enrico.enrico,      # Encryptor of Data
     ursula.ursula,      # Untrusted Re-Encryption Proxy
+    stake.stake,        # Stake Management
+    worklock.worklock,  # WorkLock
 
     # Utility Commands
-    dao.dao,            # NuCypher DAO
-    stake.stake,        # Stake Management
     status.status,      # Network Status
-    felix.felix,        # Faucet
+    dao.dao,            # NuCypher DAO
     multisig.multisig,  # MultiSig operations
-    worklock.worklock,   # WorkLock
-    cloudworkers.cloudworkers #Remote Worker node management
+    felix.felix,        # Faucet
+    cloudworkers.cloudworkers,  # Remote Worker node management
+    contacts.contacts,          # Character "card" management
 )
 
 for entry_point in ENTRY_POINTS:

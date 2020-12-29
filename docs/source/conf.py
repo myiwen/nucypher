@@ -46,7 +46,7 @@ author = 'NuCypher'
 # The short X.Y version
 version = ''
 # The full version, including alpha/beta/rc tags
-release = '4.1.2'
+release = '4.4.0'
 
 
 # -- General configuration ---------------------------------------------------
@@ -253,6 +253,7 @@ def run_apidoc(_):
         'scripts',
         Path('nucypher', 'utilities'),
         Path('nucypher', 'blockchain', 'eth', 'sol'),
+        Path('nucypher', 'blockchain', 'eth', 'economics.py'),
     ]
     for exclusion_item in exclusion_items:
         apidoc_command.append(f'{nucypher_module_dir / exclusion_item}')
@@ -261,9 +262,16 @@ def run_apidoc(_):
     apidoc.main(apidoc_command)
 
 
+def run_solidity_apidoc(_):
+    from scripts.solidity_doc.generate_doc import generate_doc
+    generate_doc()
+
+
 def setup(app):
+    app.add_css_file('style.css')
     app.connect("autodoc-process-docstring", remove_module_license)
     app.connect('builder-inited', run_apidoc)
+    app.connect('builder-inited', run_solidity_apidoc)
 
 
 add_module_names = False

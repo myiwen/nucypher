@@ -48,21 +48,24 @@ class NU:
     An amount of NuCypher tokens that doesn't hurt your eyes.
     Wraps the eth_utils currency conversion methods.
 
-    The easiest way to use NU, is to pass an int, float, or str, and denomination string:
+    The easiest way to use NU, is to pass an int, Decimal, or str, and denomination string:
 
     Int:    nu = NU(100, 'NU')
-    Int:    nu_wei = NU(15000000000000000000000, 'NuNit')
+    Int:    nu = NU(15000000000000000000000, 'NuNit')
 
-    Float:  nu = NU(15042.445, 'NU')
+    Decimal:  nu = NU(Decimal('15042.445'), 'NU')
     String: nu = NU('10002.302', 'NU')
 
     ...or alternately...
 
-    Float: nu = NU.from_tokens(100.50)
-    Int: nu_wei = NU.from_nu_wei(15000000000000000000000)
+    Decimal: nu = NU.from_tokens(Decimal('100.50'))
+    Int: nu = NU.from_nunits(15000000000000000000000)
 
     Token quantity is stored internally as an int in the smallest denomination,
     and all arithmetic operations use this value.
+
+    Using float inputs to this class to represent amounts of NU is supported but not recommended,
+    as floats don't have enough precision to represent some quantities.
     """
 
     __symbol = 'NU'
@@ -74,7 +77,7 @@ class NU:
     class InvalidDenomination(ValueError):
         """Raised when an unknown denomination string is passed into __init__"""
 
-    def __init__(self, value: Union[int, float, str], denomination: str):
+    def __init__(self, value: Union[int, Decimal, str], denomination: str):
 
         # Lookup Conversion
         try:
@@ -97,7 +100,7 @@ class NU:
         return cls(value, denomination='NuNit')
 
     @classmethod
-    def from_tokens(cls, value: Union[int, float, str]) -> 'NU':
+    def from_tokens(cls, value: Union[int, Decimal, str]) -> 'NU':
         return cls(value, denomination='NU')
 
     def to_tokens(self) -> Decimal:
@@ -560,8 +563,12 @@ class WorkTracker:
         self.__uptime_period = NOT_STAKING
         self._abort_on_error = False
 
+        self._consecutive_fails = 0
+
     @classmethod
-    def random_interval(cls) -> int:
+    def random_interval(cls, fails=None) -> int:
+        if fails is not None and fails > 0:
+            return cls.INTERVAL_FLOOR
         return random.randint(cls.INTERVAL_FLOOR, cls.INTERVAL_CEIL)
 
     @property
@@ -569,7 +576,7 @@ class WorkTracker:
         return self.__current_period
 
     def max_confirmation_time(self) -> int:
-        expected_time = EXPECTED_CONFIRMATION_TIME_IN_SECONDS[self.gas_strategy]
+        expected_time = EXPECTED_CONFIRMATION_TIME_IN_SECONDS[self.gas_strategy]  # FIXME: #2447
         result = expected_time * (1 + self.ALLOWED_DEVIATION)
         return result
 
@@ -595,8 +602,8 @@ class WorkTracker:
         self.__uptime_period = self.staking_agent.get_current_period()
         self.__current_period = self.__uptime_period
 
-        self.log.info(f"START WORK TRACKING")
-        d = self._tracking_task.start(interval=self.random_interval(), now=act_now)
+        self.log.info(f"START WORK TRACKING (immediate action: {act_now})")
+        d = self._tracking_task.start(interval=self.random_interval(fails=self._consecutive_fails), now=act_now)
         d.addErrback(self.handle_working_errors)
 
     def _crash_gracefully(self, failure=None) -> None:
@@ -615,9 +622,16 @@ class WorkTracker:
             self.stop()
             reactor.callFromThread(self._crash_gracefully, failure=failure)
         else:
-            self.log.warn(f'Unhandled error during work tracking: {failure.getTraceback()!r}',
+            self.log.warn(f'Unhandled error during work tracking (#{self._consecutive_fails}): {failure.getTraceback()!r}',
                           failure=failure)
-            self.start()
+
+            # the effect of this is that we get one immediate retry.
+            # After that, the random_interval will be honored until
+            # success is achieved
+            act_now = self._consecutive_fails < 1
+            self._consecutive_fails += 1
+            self.start(act_now=act_now)
+
 
     def __work_requirement_is_satisfied(self) -> bool:
         # TODO: Check for stake expiration and exit
@@ -637,8 +651,10 @@ class WorkTracker:
         tx_count_pending = self.client.get_transaction_count(account=worker_address, pending=True)
         tx_count_latest = self.client.get_transaction_count(account=worker_address, pending=False)
         txs_in_mempool = tx_count_pending - tx_count_latest
+
         if len(self.__pending) == txs_in_mempool:
             return True  # OK!
+
         if txs_in_mempool > len(self.__pending):  # We're missing some pending TXs
             return False
         else:  # TODO #2429: What to do when txs_in_mempool < len(self.__pending)? What does this imply?
@@ -647,13 +663,17 @@ class WorkTracker:
     def __track_pending_commitments(self) -> bool:
         # TODO: Keep a purpose-built persistent log of worker transaction history
 
-        unmined_transactions = list()
+        unmined_transactions = 0
         pending_transactions = self.pending.items()    # note: this must be performed non-mutatively
         for tx_firing_block_number, txhash in sorted(pending_transactions):
+            if txhash is UNTRACKED_PENDING_TRANSACTION:
+                unmined_transactions += 1
+                continue
+
             try:
                 confirmed_tx_receipt = self.client.get_transaction_receipt(transaction_hash=txhash)
             except TransactionNotFound:
-                unmined_transactions.append(txhash)  # mark as unmined - Keep tracking it for now
+                unmined_transactions += 1  # mark as unmined - Keep tracking it for now
                 continue
             else:
                 confirmation_block_number = confirmed_tx_receipt['blockNumber']
@@ -662,8 +682,8 @@ class WorkTracker:
                 del self.__pending[tx_firing_block_number]
 
         if unmined_transactions:
-            s = "s" if len(unmined_transactions) > 1 else ""
-            self.log.info(f'{len(unmined_transactions)} pending commitment transaction{s} detected.')
+            s = "s" if unmined_transactions > 1 else ""
+            self.log.info(f'{unmined_transactions} pending commitment transaction{s} detected.')
 
         inconsistent_tracker = not self.__commitments_tracker_is_consistent()
         if inconsistent_tracker:
@@ -702,6 +722,10 @@ class WorkTracker:
         self.__fire_replacement_commitment(current_block_number=current_block_number,
                                            tx_firing_block_number=tx_firing_block_number)
 
+    def __reset_tracker_state(self) -> None:
+        self.__pending.clear()  # Forget the past. This is a new beginning.
+        self._consecutive_fails = 0
+
     def _do_work(self) -> None:
         """
         Async working task for Ursula  # TODO: Split into multiple async tasks
@@ -715,6 +739,8 @@ class WorkTracker:
         onchain_period = self.staking_agent.get_current_period()  # < -- Read from contract
         if self.current_period != onchain_period:
             self.__current_period = onchain_period
+            self.log.info(f"New period is {self.__current_period}")
+            self.__reset_tracker_state()
 
             # TODO: #1515 and #1517 - Shut down at end of terminal stake
             # This slows down tests substantially and adds additional
@@ -724,6 +750,7 @@ class WorkTracker:
         # Measure working interval
         interval = onchain_period - self.worker.last_committed_period
         if interval < 0:
+            self.__reset_tracker_state()
             return  # No need to commit to this period.  Save the gas.
         if interval > 0:
             # TODO: #1516 Follow-up actions for missed commitments
@@ -738,7 +765,7 @@ class WorkTracker:
             return  # This cycle is finished.
         else:
             # Randomize the next task interval over time, within bounds.
-            self._tracking_task.interval = self.random_interval()
+            self._tracking_task.interval = self.random_interval(fails=self._consecutive_fails)
 
         # Only perform work this round if the requirements are met
         if not self.__work_requirement_is_satisfied():
@@ -812,6 +839,7 @@ class StakeList(UserList):
 
         # Read from blockchain
         stakes_reader = self.staking_agent.get_all_stakes(staker_address=self.checksum_address)
+        inactive_substakes = []
         for onchain_index, stake_info in enumerate(stakes_reader):
 
             if not stake_info:
@@ -833,6 +861,9 @@ class StakeList(UserList):
                 if onchain_stake.final_locked_period > terminal_period:
                     terminal_period = onchain_stake.final_locked_period
 
+                if onchain_stake.status().is_child(Stake.Status.INACTIVE):
+                    inactive_substakes.append(onchain_index)
+
             # Store the replacement stake
             onchain_stakes.append(onchain_stake)
 
@@ -843,6 +874,8 @@ class StakeList(UserList):
             self.__terminal_period = terminal_period
             changed_records = abs(existing_records - len(onchain_stakes))
             self.log.debug(f"Updated {changed_records} local staking cache entries.")
+            if inactive_substakes:
+                self.log.debug(f"The following sub-stakes are inactive: {inactive_substakes}")
 
         # Record most recent cache update
         self.__updated = maya.now()

@@ -15,18 +15,25 @@ You should have received a copy of the GNU Affero General Public License
 along with nucypher.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+
 import click
+import maya
 import os
-from constant_sorrow.constants import NO_BLOCKCHAIN_CONNECTION, NO_PASSWORD
+from constant_sorrow.constants import NO_PASSWORD
+from datetime import timedelta
+from web3.main import Web3
 
 from nucypher.blockchain.eth.signers.software import ClefSigner
 from nucypher.characters.control.emitters import StdoutEmitter
 from nucypher.characters.control.interfaces import AliceInterface
+from nucypher.characters.lawful import Bob
 from nucypher.cli.actions.auth import get_client_password, get_nucypher_password
 from nucypher.cli.actions.configure import (
     destroy_configuration,
-    handle_missing_configuration_file, get_or_update_configuration
+    handle_missing_configuration_file,
+    get_or_update_configuration
 )
+from nucypher.cli.actions.confirm import confirm_staged_grant
 from nucypher.cli.actions.select import select_client_account, select_config_file
 from nucypher.cli.commands.deploy import option_gas_strategy
 from nucypher.cli.config import group_general_config
@@ -40,7 +47,6 @@ from nucypher.cli.options import (
     option_dry_run,
     option_federated_only,
     option_force,
-    option_geth,
     option_hw_wallet,
     option_light,
     option_m,
@@ -53,23 +59,25 @@ from nucypher.cli.options import (
     option_registry_filepath,
     option_signer_uri,
     option_teacher_uri,
-    option_lonely
+    option_lonely, option_max_gas_price
 )
 from nucypher.cli.painting.help import paint_new_installation_help
-from nucypher.cli.processes import get_geth_provider_process
+from nucypher.cli.painting.help import (
+    paint_probationary_period_disclaimer,
+    enforce_probationary_period
+)
+from nucypher.cli.painting.policies import paint_single_card
 from nucypher.cli.types import EIP55_CHECKSUM_ADDRESS
+from nucypher.cli.types import GWEI
 from nucypher.cli.utils import make_cli_character, setup_emitter
 from nucypher.config.characters import AliceConfiguration
-from nucypher.config.constants import NUCYPHER_ENVVAR_ALICE_ETH_PASSWORD, TEMPORARY_DOMAIN
+from nucypher.config.constants import (
+    NUCYPHER_ENVVAR_ALICE_ETH_PASSWORD,
+    TEMPORARY_DOMAIN,
+)
 from nucypher.config.keyring import NucypherKeyring
 from nucypher.network.middleware import RestMiddleware
-
-option_bob_verifying_key = click.option(
-    '--bob-verifying-key',
-    help="Bob's verifying key as a hexadecimal string",
-    type=click.STRING,
-    required=True
-)
+from nucypher.policy.identity import Card
 
 option_pay_with = click.option('--pay-with', help="Run with a specified account", type=EIP55_CHECKSUM_ADDRESS)
 option_duration_periods = click.option('--duration-periods', help="Policy duration in periods", type=click.INT)
@@ -83,36 +91,24 @@ class AliceConfigOptions:
                  dev: bool,
                  network: str,
                  provider_uri: str,
-                 geth: bool,
                  federated_only: bool,
                  discovery_port: int,
                  pay_with: str,
                  registry_filepath: str,
                  middleware: RestMiddleware,
                  gas_strategy: str,
+                 max_gas_price: int,  # gwei
                  signer_uri: str,
                  lonely: bool,
                  ):
-
-        if federated_only and geth:
-            raise click.BadOptionUsage(
-                option_name="--geth",
-                message="--federated-only cannot be used with the --geth flag")
-
-        # Managed Ethereum Client
-        eth_node = NO_BLOCKCHAIN_CONNECTION
-        if geth:
-            eth_node = get_geth_provider_process()
-            provider_uri = eth_node.provider_uri(scheme='file')
 
         self.dev = dev
         self.domain = network
         self.provider_uri = provider_uri
         self.signer_uri = signer_uri
         self.gas_strategy = gas_strategy
-        self.geth = geth
+        self.max_gas_price = max_gas_price
         self.federated_only = federated_only
-        self.eth_node = eth_node
         self.pay_with = pay_with
         self.discovery_port = discovery_port
         self.registry_filepath = registry_filepath
@@ -134,10 +130,10 @@ class AliceConfigOptions:
                 dev_mode=True,
                 network_middleware=self.middleware,
                 domain=TEMPORARY_DOMAIN,
-                provider_process=self.eth_node,
                 provider_uri=self.provider_uri,
                 signer_uri=self.signer_uri,
                 gas_strategy=self.gas_strategy,
+                max_gas_price=self.max_gas_price,
                 federated_only=True,
                 lonely=self.lonely
             )
@@ -149,10 +145,10 @@ class AliceConfigOptions:
                     dev_mode=False,
                     network_middleware=self.middleware,
                     domain=self.domain,
-                    provider_process=self.eth_node,
                     provider_uri=self.provider_uri,
                     signer_uri=self.signer_uri,
                     gas_strategy=self.gas_strategy,
+                    max_gas_price=self.max_gas_price,
                     filepath=config_file,
                     rest_port=self.discovery_port,
                     checksum_address=self.pay_with,
@@ -173,7 +169,7 @@ group_config_options = group_options(
     provider_uri=option_provider_uri(),
     signer_uri=option_signer_uri,
     gas_strategy=option_gas_strategy,
-    geth=option_geth,
+    max_gas_price=option_max_gas_price,
     federated_only=option_federated_only,
     discovery_port=option_discovery_port(),
     pay_with=option_pay_with,
@@ -212,7 +208,8 @@ class AliceFullConfigOptions:
             pay_with = select_client_account(emitter=emitter,
                                              provider_uri=opts.provider_uri,
                                              signer_uri=opts.signer_uri,
-                                             show_eth_balance=True)
+                                             show_eth_balance=True,
+                                             network=opts.domain)
 
         return AliceConfiguration.generate(
             password=get_nucypher_password(confirm=True),
@@ -222,7 +219,6 @@ class AliceFullConfigOptions:
             federated_only=opts.federated_only,
             provider_uri=opts.provider_uri,
             signer_uri=opts.signer_uri,
-            provider_process=opts.eth_node,
             registry_filepath=opts.registry_filepath,
             poa=self.poa,
             light=self.light,
@@ -409,6 +405,23 @@ def public_keys(general_config, character_options, config_file):
     return response
 
 
+@alice.command()
+@group_character_options
+@option_config_file
+@group_general_config
+@click.option('--nickname', help="Human-readable nickname / alias for a card", type=click.STRING, required=False)
+def make_card(general_config, character_options, config_file, nickname):
+    """Create a character card file for public key sharing"""
+    emitter = setup_emitter(general_config)
+    ALICE = character_options.create_character(emitter, config_file, general_config.json_ipc, load_seednodes=False)
+    card = Card.from_character(ALICE)
+    if nickname:
+        card.nickname = nickname
+    card.save(overwrite=True)
+    emitter.message(f"Saved new character card to {card.filepath}", color='green')
+    paint_single_card(card=card, emitter=emitter)
+
+
 @alice.command('derive-policy-pubkey')
 @AliceInterface.connect_cli('derive_policy_encrypting_key')
 @group_character_options
@@ -426,7 +439,10 @@ def derive_policy_pubkey(general_config, label, character_options, config_file):
 @option_config_file
 @group_general_config
 @group_character_options
+@option_force
+@click.option('--bob', type=click.STRING, help="The card id or nickname of a stored Bob card.")
 def grant(general_config,
+          bob,
           bob_encrypting_key,
           bob_verifying_key,
           label,
@@ -435,23 +451,89 @@ def grant(general_config,
           expiration,
           m, n,
           character_options,
-          config_file):
+          config_file,
+          force):
     """Create and enact an access policy for some Bob. """
 
     # Setup
     emitter = setup_emitter(general_config)
     ALICE = character_options.create_character(emitter, config_file, general_config.json_ipc)
 
-    # Input validation
+    # Policy option validation
     if ALICE.federated_only:
         if any((value, rate)):
-            raise click.BadOptionUsage(option_name="--value, --rate",
-                                       message="Can't use --value or --rate with a federated Alice.")
+            message = "Can't use --value or --rate with a federated Alice."
+            raise click.BadOptionUsage(option_name="--value, --rate", message=message)
     elif bool(value) and bool(rate):
         raise click.BadOptionUsage(option_name="--rate", message="Can't use --value if using --rate")
-    elif not (bool(value) or bool(rate)):
-        rate = ALICE.default_rate  # TODO #1709
-        click.confirm(f"Confirm default rate {rate}?", abort=True)
+
+    # Grantee selection
+    if bob and any((bob_encrypting_key, bob_verifying_key)):
+        message = '--bob cannot be used with --bob-encrypting-key or --bob-veryfying key'
+        raise click.BadOptionUsage(option_name='--bob', message=message)
+
+    if bob:
+        card = Card.load(identifier=bob)
+        if card.character is not Bob:
+            emitter.error('Grantee card is not a Bob.')
+            raise click.Abort
+        paint_single_card(emitter=emitter, card=card)
+        if not force:
+            click.confirm('Is this the correct grantee (Bob)?', abort=True)
+        bob_encrypting_key = card.encrypting_key.hex()
+        bob_verifying_key = card.verifying_key.hex()
+
+    # Interactive collection follows:
+    # TODO: Extricate to support modules
+    # - Disclaimer
+    # - Label
+    # - Expiration Date & Time
+    # - M of N
+    # - Policy Value (ETH)
+
+    # Policy Expiration
+    # TODO: Remove this line when the time is right.
+    paint_probationary_period_disclaimer(emitter)
+
+    # Label
+    if not label:
+        label = click.prompt(f'Enter label to grant Bob {bob_verifying_key[:8]}', type=click.STRING)
+
+    if not force and not expiration:
+        if ALICE.duration_periods:
+            # TODO: use a default in days or periods?
+            expiration = maya.now() + timedelta(days=ALICE.duration_periods)  # default
+            if not click.confirm(f'Use default policy duration (expires {expiration})?'):
+                expiration = click.prompt('Enter policy expiration datetime', type=click.DateTime())
+        else:
+            # No policy duration default default available; Go interactive
+            expiration = click.prompt('Enter policy expiration datetime', type=click.DateTime())
+
+    # TODO: Remove this line when the time is right.
+    enforce_probationary_period(emitter=emitter, expiration=expiration)
+
+    # Policy Threshold and Shares
+    if not n:
+        n = ALICE.n
+        if not force and not click.confirm(f'Use default value for N ({n})?', default=True):
+            n = click.prompt('Enter total number of shares (N)', type=click.INT)
+    if not m:
+        m = ALICE.m
+        if not force and not click.confirm(f'Use default value for M ({m})?', default=True):
+            m = click.prompt('Enter threshold (M)', type=click.IntRange(1, n))
+
+    # Policy Value
+    policy_value_provided = bool(value) or bool(rate)
+    if not ALICE.federated_only and not policy_value_provided:
+        rate = ALICE.default_rate  # TODO #1709 - Fine tuning and selection of default rates
+        if not force:
+            default_gwei = Web3.fromWei(rate, 'gwei')
+            prompt = "Confirm rate of {node_rate} gwei ({total_rate} gwei per period)?"
+            if not click.confirm(prompt.format(node_rate=default_gwei, total_rate=default_gwei*n), default=True):
+                interactive_rate = click.prompt('Enter rate per period in gwei', type=GWEI)
+                # TODO: Validate interactively collected rate (#1709)
+                click.confirm(prompt.format(node_rate=rate, total_rate=rate*n), default=True, abort=True)
+                rate = Web3.toWei(interactive_rate, 'gwei')
 
     # Request
     grant_request = {
@@ -466,7 +548,11 @@ def grant(general_config,
         if value:
             grant_request['value'] = value
         elif rate:
-            grant_request['rate'] = rate
+            grant_request['rate'] = rate  # in wei
+
+    if not force and not general_config.json_ipc:
+        confirm_staged_grant(emitter=emitter, grant_request=grant_request)
+    emitter.echo(f'Granting Access to {bob_verifying_key[:8]}', color='yellow')
     return ALICE.controller.grant(request=grant_request)
 
 

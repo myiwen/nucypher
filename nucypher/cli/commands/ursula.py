@@ -50,7 +50,6 @@ from nucypher.cli.options import (
     option_dry_run,
     option_federated_only,
     option_force,
-    option_geth,
     option_light,
     option_min_stake,
     option_network,
@@ -59,11 +58,10 @@ from nucypher.cli.options import (
     option_registry_filepath,
     option_signer_uri,
     option_teacher_uri,
-    option_lonely
+    option_lonely, option_max_gas_price
 )
 from nucypher.cli.painting.help import paint_new_installation_help
 from nucypher.cli.painting.transactions import paint_receipt_summary
-from nucypher.cli.processes import get_geth_provider_process
 from nucypher.cli.types import EIP55_CHECKSUM_ADDRESS, NETWORK_PORT
 from nucypher.cli.utils import make_cli_character, setup_emitter
 from nucypher.config.characters import UrsulaConfiguration
@@ -81,38 +79,29 @@ class UrsulaConfigOptions:
     __option_name__ = 'config_options'
 
     def __init__(self,
-                 geth,
-                 provider_uri,
-                 worker_address,
-                 federated_only,
-                 rest_host,
-                 rest_port,
-                 db_filepath,
-                 network,
-                 registry_filepath,
-                 dev,
-                 poa,
-                 light,
-                 gas_strategy,
-                 signer_uri,
-                 availability_check,
+                 provider_uri: str,
+                 worker_address: str,
+                 federated_only: bool,
+                 rest_host: str,
+                 rest_port: int,
+                 db_filepath: str,
+                 network: str,
+                 registry_filepath: str,
+                 dev: bool,
+                 poa: bool,
+                 light: bool,
+                 gas_strategy: str,
+                 max_gas_price: int,  # gwei
+                 signer_uri: str,
+                 availability_check: bool,
                  lonely: bool
                  ):
 
         if federated_only:
-            if geth:
-                raise click.BadOptionUsage(option_name="--geth", message="--geth cannot be used in federated mode.")
-
             if registry_filepath:
                 raise click.BadOptionUsage(option_name="--registry-filepath",
                                            message=f"--registry-filepath cannot be used in federated mode.")
 
-        eth_node = NO_BLOCKCHAIN_CONNECTION
-        if geth:
-            eth_node = get_geth_provider_process()
-            provider_uri = eth_node.provider_uri(scheme='file')
-
-        self.eth_node = eth_node
         self.provider_uri = provider_uri
         self.signer_uri = signer_uri
         self.worker_address = worker_address
@@ -126,6 +115,7 @@ class UrsulaConfigOptions:
         self.poa = poa
         self.light = light
         self.gas_strategy = gas_strategy
+        self.max_gas_price = max_gas_price
         self.availability_check = availability_check
         self.lonely = lonely
 
@@ -138,10 +128,10 @@ class UrsulaConfigOptions:
                 poa=self.poa,
                 light=self.light,
                 registry_filepath=self.registry_filepath,
-                provider_process=self.eth_node,
                 provider_uri=self.provider_uri,
                 signer_uri=self.signer_uri,
                 gas_strategy=self.gas_strategy,
+                max_gas_price=self.max_gas_price,
                 checksum_address=self.worker_address,
                 federated_only=self.federated_only,
                 rest_host=self.rest_host,
@@ -156,10 +146,10 @@ class UrsulaConfigOptions:
                     filepath=config_file,
                     domain=self.domain,
                     registry_filepath=self.registry_filepath,
-                    provider_process=self.eth_node,
                     provider_uri=self.provider_uri,
                     signer_uri=self.signer_uri,
                     gas_strategy=self.gas_strategy,
+                    max_gas_price=self.max_gas_price,
                     rest_host=self.rest_host,
                     rest_port=self.rest_port,
                     db_filepath=self.db_filepath,
@@ -206,10 +196,10 @@ class UrsulaConfigOptions:
                                             federated_only=self.federated_only,
                                             worker_address=worker_address,
                                             registry_filepath=self.registry_filepath,
-                                            provider_process=self.eth_node,
                                             provider_uri=self.provider_uri,
                                             signer_uri=self.signer_uri,
                                             gas_strategy=self.gas_strategy,
+                                            max_gas_price=self.max_gas_price,
                                             poa=self.poa,
                                             light=self.light,
                                             availability_check=self.availability_check)
@@ -225,6 +215,7 @@ class UrsulaConfigOptions:
                        provider_uri=self.provider_uri,
                        signer_uri=self.signer_uri,
                        gas_strategy=self.gas_strategy,
+                       max_gas_price=self.max_gas_price,
                        poa=self.poa,
                        light=self.light,
                        availability_check=self.availability_check)
@@ -235,10 +226,10 @@ class UrsulaConfigOptions:
 
 group_config_options = group_options(
     UrsulaConfigOptions,
-    geth=option_geth,
     provider_uri=option_provider_uri(),
     signer_uri=option_signer_uri,
     gas_strategy=option_gas_strategy,
+    max_gas_price=option_max_gas_price,
     worker_address=click.option('--worker-address', help="Run the worker-ursula with a specified address", type=EIP55_CHECKSUM_ADDRESS),
     federated_only=option_federated_only,
     rest_host=click.option('--rest-host', help="The host IP address to run Ursula network services on", type=click.STRING),
