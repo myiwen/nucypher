@@ -130,7 +130,7 @@ class CheapfastGasPriceDatafeed(EthereumGasPriceDatafeed):
         self._probe_feed()
         print('get gasnow price')
         self.gas_prices = {self.get_canonical_speed(k): int(Web3.toWei(int(v / 10 ** 9), 'gwei')) for k, v in self._raw_data['data'].items() if k in self._speed_names}
-        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices['fast'], self.gas_prices['standard'])
+        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices[FAST], self.gas_prices[MEDIUM])
         self.fair_price = self.gas_prices['cheapfast'] if self.fair_price is None else min(self.fair_price, self.gas_prices['cheapfast'])
 
     def _parse_gas_prices(self):
@@ -163,7 +163,7 @@ class CheapfastGasPriceDatafeed2(EthereumGasPriceDatafeed):
         self._probe_feed()
         print('get etherchain price')
         self.gas_prices = {self.get_canonical_speed(k): int(Web3.toWei(v, 'gwei')) for k, v in self._raw_data.items()}
-        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices['fast'], self.gas_prices['standard'])
+        self.gas_prices['cheapfast'] = get_cheap_fast_price(self.gas_prices[FAST], self.gas_prices[MEDIUM])
         self.fair_price = self.gas_prices['cheapfast'] if self.fair_price is None else min(self.fair_price, self.gas_prices['cheapfast'])
 
     def _parse_gas_prices(self):
